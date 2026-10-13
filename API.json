@@ -1,0 +1,53 @@
+[
+    {
+        "id": "api_endpoint_tab",
+        "type": "tab",
+        "label": "Trash Box API",
+        "disabled": false,
+        "info": "Handles incoming POST requests for trash box status and reset actions."
+    },
+    {
+        "id": "http_in_box6",
+        "type": "http in",
+        "z": "api_endpoint_tab",
+        "name": "POST /trash/box/box6",
+        "url": "/trash/box/box6",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 140,
+        "wires": [
+            ["api_logic_function"]
+        ]
+    },
+    {
+        "id": "api_logic_function",
+        "type": "function",
+        "z": "api_endpoint_tab",
+        "name": "Process API Request & Colors",
+        "func": "// =========================================================================\n// 1. CHECK INCOMING REQUEST BODY OR RESET ACTION\n// =========================================================================\nlet reqBody = msg.payload || {};\n\n// Check if a reset command was sent (e.g., setting colors to white or explicit reset flag)\nlet isReset = reqBody.reset === true || reqBody.action === \"reset\";\n\nlet responseData = {};\n\nif (isReset) {\n    // =====================================================================\n    // RESET LOGIC: Set all colors to white\n    // =====================================================================\n    node.status({ fill: \"grey\", shape: \"ring\", text: \"Resetting to white\" });\n    \n    responseData = {\n        colorBio: \"white\",\n        colorPaper: \"white\",\n        colorDomestic: \"white\",\n        colorPlastic: \"white\" // ADJUST FIELD NAMES HERE AS NEEDED\n    };\n} else {\n    // =====================================================================\n    // STANDARD STATUS LOGIC: Return current colors (Integrate schedule data here)\n    // =====================================================================\n    node.status({ fill: \"green\", shape: \"dot\", text: \"Serving status payload\" });\n    \n    responseData = {\n        // ADJUST OR ADD THE TRASH CATEGORY NAMES AND COLORS BELOW:\n        colorBio: \"green\",\n        colorPaper: \"yellow\",\n        colorDomestic: \"red\",\n        colorPlastic: \"blue\"\n    };\n}\n\n// Attach to msg.payload for the HTTP Response node\nmsg.payload = responseData;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 530,
+        "y": 140,
+        "wires": [
+            ["http_response_node"]
+        ]
+    },
+    {
+        "id": "http_response_node",
+        "type": "http response",
+        "z": "api_endpoint_tab",
+        "name": "Send JSON Response",
+        "statusCode": "",
+        "headers": {},
+        "x": 830,
+        "y": 140,
+        "wires": []
+    }
+]
