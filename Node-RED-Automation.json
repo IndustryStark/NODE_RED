@@ -1,0 +1,99 @@
+[
+    {
+        "id": "led_gc_tab",
+        "type": "tab",
+        "label": "Garbage LED Reminder",
+        "disabled": false,
+        "info": "Runs daily at 6 AM, checks tomorrow's schedule, and toggles an LED."
+    },
+    {
+        "id": "daily_6am_trigger",
+        "type": "inject",
+        "z": "led_gc_tab",
+        "name": "Daily at 6:00 AM",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "00 06 * * *",
+        "once": false,
+        "onceDelay": "",
+        "topic": "",
+        "payload": "",
+        "payloadType": "str",
+        "x": 200,
+        "y": 120,
+        "wires": [
+            ["read_ics_file_led"]
+        ]
+    },
+    {
+        "id": "read_ics_file_led",
+        "type": "file in",
+        "z": "led_gc_tab",
+        "name": "Read schedule.ics",
+        "filename": "/home/pi/node-red-data/schedule.ics",
+        "filenameType": "str",
+        "format": "utf8",
+        "chunk": false,
+        "sendError": false,
+        "encoding": "none",
+        "allProps": false,
+        "x": 480,
+        "y": 120,
+        "wires": [
+            ["check_tomorrow_function"]
+        ]
+    },
+    {
+        "id": "check_tomorrow_function",
+        "type": "function",
+        "z": "led_gc_tab",
+        "name": "Check Tomorrow's Schedule",
+        "func": "let fileContent = msg.payload;\nif (!fileContent || typeof fileContent !== 'string') {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"Invalid file content\" });\n    msg.payload = 0; // Turn off LED on error\n    return msg;\n}\n\nlet lines = fileContent.split(/\\r?\\n/);\nlet events = [];\nlet currentEvent = null;\n\n// Basic iCalendar VEVENT parser\nfor (let line of lines) {\n    if (line.startsWith('BEGIN:VEVENT')) {\n        currentEvent = {};\n    } else if (line.startsWith('END:VEVENT') && currentEvent) {\n        events.push(currentEvent);\n        currentEvent = null;\n    } else if (currentEvent) {\n        let splitIdx = line.indexOf(':');\n        if (splitIdx !== -1) {\n            let key = line.substring(0, splitIdx).trim();\n            let val = line.substring(splitIdx + 1).trim();\n            currentEvent[key] = val;\n        }\n    }\n}\n\n// Calculate TOMORROW's date in YYYYMMDD format\nlet tomorrow = new Date();\ntomorrow.setDate(tomorrow.getDate() + 1);\nlet year = tomorrow.getFullYear();\nlet month = String(tomorrow.getMonth() + 1).padStart(2, '0');\nlet day = String(tomorrow.getDate()).padStart(2, '0');\nlet tomorrowStr = `${year}${month}${day}`;\n\n// Filter events matching tomorrow's date\nlet upcomingEvents = events.filter(ev => {\n    let dtStart = ev.DTSTART ? ev.DTSTART.split('T')[0] : '';\n    return dtStart === tomorrowStr;\n});\n\nif (upcomingEvents.length > 0) {\n    node.status({ fill: \"green\", shape: \"dot\", text: `Collection tomorrow! (${upcomingEvents.length})` });\n    msg.payload = 1; // Turn LED ON\n} else {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"No collection tomorrow\" });\n    msg.payload = 0; // Turn LED OFF\n}\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 780,
+        "y": 120,
+        "wires": [
+            ["gpio_led_output", "debug_led_state"]
+        ]
+    },
+    {
+        "id": "gpio_led_output",
+        "type": "rpi-gpio out",
+        "z": "led_gc_tab",
+        "name": "LED Pin (GPIO 17)",
+        "pin": "11",
+        "set": "",
+        "level": "0",
+        "out": "out",
+        "resp": "false",
+        "x": 1090,
+        "y": 90,
+        "wires": []
+    },
+    {
+        "id": "debug_led_state",
+        "type": "debug",
+        "z": "led_gc_tab",
+        "name": "LED State (1=ON, 0=OFF)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1110,
+        "y": 160,
+        "wires": []
+    }
+]
