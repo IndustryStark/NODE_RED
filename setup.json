@@ -4,7 +4,7 @@
         "type": "tab",
         "label": "Abfall .ICS App",
         "disabled": false,
-        "info": "Parses local .ics schedule, triggers LED for tomorrow's German waste types, and exposes POST API."
+        "info": "Parses local abfall.ics schedule, triggers LED and API status, with blue exclusively reserved for no trash."
     },
     {
         "id": "daily_6am_trigger",
@@ -33,8 +33,8 @@
         "id": "read_ics_file",
         "type": "file in",
         "z": "ics_gc_tab",
-        "name": "Read schedule.ics",
-        "filename": "/home/pi/node-red-data/schedule.ics",
+        "name": "Read abfall.ics",
+        "filename": "/home/pi/node-red-data/abfall.ics",
         "filenameType": "str",
         "format": "utf8",
         "chunk": false,
@@ -52,7 +52,7 @@
         "type": "function",
         "z": "ics_gc_tab",
         "name": "Parse .ICS & German Keywords",
-        "func": "// =========================================================================\n// 1. READ & PARSE .ICS FILE CONTENT\n// =========================================================================\nlet fileContent = msg.payload;\n\nlet defaultColors = {\n    colorBio: \"white\",\n    colorPaper: \"white\",\n    colorDomestic: \"white\",\n    colorPlastic: \"white\"\n};\n\nif (!fileContent || typeof fileContent !== 'string') {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"Invalid file content\" });\n    flow.set('boxStatus', defaultColors);\n    msg.payload = 0; // Turn LED OFF\n    return msg;\n}\n\nlet lines = fileContent.split(/\\r?\\n/);\nlet events = [];\nlet currentEvent = null;\n\nfor (let line of lines) {\n    if (line.startsWith('BEGIN:VEVENT')) {\n        currentEvent = {};\n    } else if (line.startsWith('END:VEVENT') && currentEvent) {\n        events.push(currentEvent);\n        currentEvent = null;\n    } else if (currentEvent) {\n        let splitIdx = line.indexOf(':');\n        if (splitIdx !== -1) {\n            let key = line.substring(0, splitIdx).trim();\n            let val = line.substring(splitIdx + 1).trim();\n            currentEvent[key] = val;\n        }\n    }\n}\n\n// =========================================================================\n// 2. CALCULATE TOMORROW'S DATE (YYYYMMDD format matching .ics DTSTART)\n// =========================================================================\nlet tomorrow = new Date();\ntomorrow.setDate(tomorrow.getDate() + 1);\nlet year = tomorrow.getFullYear();\nlet month = String(tomorrow.getMonth() + 1).padStart(2, '0');\nlet day = String(tomorrow.getDate()).padStart(2, '0');\nlet tomorrowStr = `${year}${month}${day}`;\n\n// Filter events for tomorrow\nlet upcomingEvents = events.filter(ev => {\n    let dtStart = ev.DTSTART ? ev.DTSTART.split(';')[0].split(':')[1] || ev.DTSTART.split('T')[0] : '';\n    // Handle formats like DTSTART;VALUE=DATE:20261017\n    if (ev.DTSTART && ev.DTSTART.includes(':')) {\n        dtStart = ev.DTSTART.split(':').pop().trim();\n    }\n    return dtStart === tomorrowStr;\n});\n\nlet activeColors = { ...defaultColors };\nlet ledState = 0;\n\nif (upcomingEvents.length > 0) {\n    ledState = 1;\n    node.status({ fill: \"green\", shape: \"dot\", text: `Morgen Abholung! (${upcomingEvents.length})` });\n\n    // =====================================================================\n    // 3. MAP GERMAN SUMMARIES TO COLORS\n    // =====================================================================\n    for (let ev of upcomingEvents) {\n        let summary = (ev.SUMMARY || \"\").toLowerCase();\n        \n        if (summary.includes('biomüll') || summary.includes('bio')) {\n            activeColors.colorBio = \"green\"; // ADJUST COLOR HERE\n        }\n        if (summary.includes('papier')) {\n            activeColors.colorPaper = \"yellow\"; // ADJUST COLOR HERE\n        }\n        if (summary.includes('restmüll')) {\n            activeColors.colorDomestic = \"red\"; // ADJUST COLOR HERE\n        }\n        if (summary.includes('wertstoffe')) {\n            activeColors.colorPlastic = \"blue\"; // ADJUST COLOR HERE\n        }\n    }\n} else {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"Keine Abholung morgen\" });\n    ledState = 0;\n}\n\n// Save status to flow context for the API endpoint\nflow.set('boxStatus', activeColors);\n\n// Output LED state (1 = ON, 0 = OFF)\nmsg.payload = ledState;\nreturn msg;",
+        "func": "let fileContent = msg.payload;\n\nlet defaultResponse = {\n    actionBio: \"no collection\",\n    colorBio: \"white\",\n    actionPaper: \"no collection\",\n    colorPaper: \"white\",\n    actionDomestic: \"no collection\",\n    colorDomestic: \"white\"\n};\n\nif (!fileContent || typeof fileContent !== 'string') {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"Invalid file content\" });\n    flow.set('boxStatus', defaultResponse);\n    msg.payload = { ledPower: 0, status: defaultResponse };\n    return msg;\n}\n\nlet lines = fileContent.split(/\\r?\\n/);\nlet events = [];\nlet currentEvent = null;\n\nfor (let line of lines) {\n    if (line.startsWith('BEGIN:VEVENT')) {\n        currentEvent = {};\n    } else if (line.startsWith('END:VEVENT') && currentEvent) {\n        events.push(currentEvent);\n        currentEvent = null;\n    } else if (currentEvent) {\n        let splitIdx = line.indexOf(':');\n        if (splitIdx !== -1) {\n            let key = line.substring(0, splitIdx).trim();\n            let val = line.substring(splitIdx + 1).trim();\n            currentEvent[key] = val;\n        }\n    }\n}\n\nlet tomorrow = new Date();\ntomorrow.setDate(tomorrow.getDate() + 1);\nlet year = tomorrow.getFullYear();\nlet month = String(tomorrow.getMonth() + 1).padStart(2, '0');\nlet day = String(tomorrow.getDate()).padStart(2, '0');\nlet tomorrowStr = `${year}${month}${day}`;\n\nlet upcomingEvents = events.filter(ev => {\n    let dtStart = \"\";\n    if (ev.DTSTART) {\n        if (ev.DTSTART.includes(':')) {\n            dtStart = ev.DTSTART.split(':').pop().trim();\n        } else {\n            dtStart = ev.DTSTART.split('T')[0];\n        }\n    }\n    return dtStart === tomorrowStr;\n});\n\nlet activeResponse = { ...defaultResponse };\nlet ledState = 0;\n\nif (upcomingEvents.length > 0) {\n    ledState = 1;\n    node.status({ fill: \"green\", shape: \"dot\", text: `Morgen Abholung! (${upcomingEvents.length})` });\n\n    for (let ev of upcomingEvents) {\n        let summary = (ev.SUMMARY || \"\").toLowerCase();\n        \n        if (summary.includes('biomüll') || summary.includes('bio')) {\n            activeResponse.actionBio = \"take out the trash - biomüll\";\n            activeResponse.colorBio = \"green\";\n        }\n        if (summary.includes('papier')) {\n            activeResponse.actionPaper = \"take out the trash - papier\";\n            activeResponse.colorPaper = \"yellow\";\n        }\n        if (summary.includes('restmüll')) {\n            activeResponse.actionDomestic = \"take out the trash - restmüll\";\n            activeResponse.colorDomestic = \"red\";\n        }\n    }\n} else {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"Keine Abholung morgen\" });\n    ledState = 0;\n}\n\nflow.set('boxStatus', activeResponse);\n\nmsg.payload = {\n    ledPower: ledState,\n    status: activeResponse\n};\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -62,7 +62,7 @@
         "x": 750,
         "y": 100,
         "wires": [
-            ["gpio_led_output", "debug_automation"]
+            ["gpio_led_output", "simulation_logic_node", "debug_automation"]
         ]
     },
     {
@@ -75,8 +75,41 @@
         "level": "0",
         "out": "out",
         "resp": "false",
-        "x": 1070,
-        "y": 70,
+        "x": 1090,
+        "y": 50,
+        "wires": []
+    },
+    {
+        "id": "simulation_logic_node",
+        "type": "function",
+        "z": "ics_gc_tab",
+        "name": "Simulate LED Color By Target",
+        "func": "let data = msg.payload.status || {};\nlet activeLEDColor = \"blue\"; // Default to blue exclusively for no trash\nlet targetDescription = \"No trash scheduled for tomorrow (Blue LED)\";\n\nif (data.colorBio === \"green\") {\n    activeLEDColor = \"green\";\n    targetDescription = \"Target: Biomüll (Green LED)\";\n} else if (data.colorPaper === \"yellow\") {\n    activeLEDColor = \"yellow\";\n    targetDescription = \"Target: Papier (Yellow LED)\";\n} else if (data.colorDomestic === \"red\") {\n    activeLEDColor = \"red\";\n    targetDescription = \"Target: Restmüll (Red LED)\";\n}\n\nmsg.payload = {\n    simulationTarget: targetDescription,\n    simulatedLedColor: activeLEDColor,\n    timestamp: new Date().toISOString()\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1090,
+        "y": 110,
+        "wires": [
+            ["debug_simulation"]
+        ]
+    },
+    {
+        "id": "debug_simulation",
+        "type": "debug",
+        "z": "ics_gc_tab",
+        "name": "Simulation LED Output",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 1390,
+        "y": 110,
         "wires": []
     },
     {
@@ -90,8 +123,8 @@
         "tostatus": false,
         "complete": "payload",
         "targetType": "msg",
-        "x": 1070,
-        "y": 130,
+        "x": 1090,
+        "y": 170,
         "wires": []
     },
     {
@@ -104,7 +137,7 @@
         "upload": false,
         "swaggerDoc": "",
         "x": 190,
-        "y": 260,
+        "y": 280,
         "wires": [
             ["api_handler_function"]
         ]
@@ -114,7 +147,7 @@
         "type": "function",
         "z": "ics_gc_tab",
         "name": "Serve API Status / Reset",
-        "func": "// =========================================================================\n// API HANDLER: Serves status or resets colors to white\n// =========================================================================\nlet reqBody = msg.payload || {};\n\nlet isReset = reqBody.reset === true || \n              reqBody.action === \"reset\" || \n              reqBody.color === \"white\" ||\n              reqBody.status === \"white\";\n\nlet currentStatus = flow.get('boxStatus') || {\n    colorBio: \"white\",\n    colorPaper: \"white\",\n    colorDomestic: \"white\",\n    colorPlastic: \"white\"\n};\n\nif (isReset) {\n    node.status({ fill: \"grey\", shape: \"ring\", text: \"Reset to white requested\" });\n    \n    currentStatus = {\n        colorBio: \"white\",\n        colorPaper: \"white\",\n        colorDomestic: \"white\",\n        colorPlastic: \"white\"\n    };\n    \n    flow.set('boxStatus', currentStatus);\n} else {\n    node.status({ fill: \"blue\", shape: \"dot\", text: \"Serving current box status\" });\n}\n\nmsg.payload = currentStatus;\nreturn msg;",
+        "func": "let reqBody = msg.payload || {};\n\nlet isReset = reqBody.reset === true || \n              reqBody.action === \"reset\" || \n              reqBody.color === \"white\" ||\n              reqBody.status === \"white\";\n\nlet currentStatus = flow.get('boxStatus') || {\n    actionBio: \"no collection\",\n    colorBio: \"white\",\n    actionPaper: \"no collection\",\n    colorPaper: \"white\",\n    actionDomestic: \"no collection\",\n    colorDomestic: \"white\"\n};\n\nif (isReset) {\n    node.status({ fill: \"grey\", shape: \"ring\", text: \"Reset requested\" });\n    \n    currentStatus = {\n        actionBio: \"no collection\",\n        colorBio: \"white\",\n        actionPaper: \"no collection\",\n        colorPaper: \"white\",\n        actionDomestic: \"no collection\",\n        colorDomestic: \"white\"\n    };\n    \n    flow.set('boxStatus', currentStatus);\n} else {\n    node.status({ fill: \"blue\", shape: \"dot\", text: \"Serving current box status\" });\n}\n\nmsg.payload = currentStatus;\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -122,7 +155,7 @@
         "finalize": "",
         "libs": [],
         "x": 480,
-        "y": 260,
+        "y": 280,
         "wires": [
             ["http_response_node"]
         ]
@@ -135,7 +168,7 @@
         "statusCode": "",
         "headers": {},
         "x": 770,
-        "y": 260,
+        "y": 280,
         "wires": []
     }
 ]
