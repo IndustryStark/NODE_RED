@@ -4,7 +4,7 @@
         "type": "tab",
         "label": "Abfall .ICS App",
         "disabled": false,
-        "info": "Parses local abfall.ics schedule, triggers LED and API status, with blue exclusively reserved for no trash."
+        "info": "Parses abfall.ics, controls daily LED state, and provides multi-day upcoming schedules."
     },
     {
         "id": "daily_6am_trigger",
@@ -51,8 +51,8 @@
         "id": "parse_ics_and_update",
         "type": "function",
         "z": "ics_gc_tab",
-        "name": "Parse .ICS & German Keywords",
-        "func": "let fileContent = msg.payload;\n\nlet defaultResponse = {\n    actionBio: \"no collection\",\n    colorBio: \"white\",\n    actionPaper: \"no collection\",\n    colorPaper: \"white\",\n    actionDomestic: \"no collection\",\n    colorDomestic: \"white\"\n};\n\nif (!fileContent || typeof fileContent !== 'string') {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"Invalid file content\" });\n    flow.set('boxStatus', defaultResponse);\n    msg.payload = { ledPower: 0, status: defaultResponse };\n    return msg;\n}\n\nlet lines = fileContent.split(/\\r?\\n/);\nlet events = [];\nlet currentEvent = null;\n\nfor (let line of lines) {\n    if (line.startsWith('BEGIN:VEVENT')) {\n        currentEvent = {};\n    } else if (line.startsWith('END:VEVENT') && currentEvent) {\n        events.push(currentEvent);\n        currentEvent = null;\n    } else if (currentEvent) {\n        let splitIdx = line.indexOf(':');\n        if (splitIdx !== -1) {\n            let key = line.substring(0, splitIdx).trim();\n            let val = line.substring(splitIdx + 1).trim();\n            currentEvent[key] = val;\n        }\n    }\n}\n\nlet tomorrow = new Date();\ntomorrow.setDate(tomorrow.getDate() + 1);\nlet year = tomorrow.getFullYear();\nlet month = String(tomorrow.getMonth() + 1).padStart(2, '0');\nlet day = String(tomorrow.getDate()).padStart(2, '0');\nlet tomorrowStr = `${year}${month}${day}`;\n\nlet upcomingEvents = events.filter(ev => {\n    let dtStart = \"\";\n    if (ev.DTSTART) {\n        if (ev.DTSTART.includes(':')) {\n            dtStart = ev.DTSTART.split(':').pop().trim();\n        } else {\n            dtStart = ev.DTSTART.split('T')[0];\n        }\n    }\n    return dtStart === tomorrowStr;\n});\n\nlet activeResponse = { ...defaultResponse };\nlet ledState = 0;\n\nif (upcomingEvents.length > 0) {\n    ledState = 1;\n    node.status({ fill: \"green\", shape: \"dot\", text: `Morgen Abholung! (${upcomingEvents.length})` });\n\n    for (let ev of upcomingEvents) {\n        let summary = (ev.SUMMARY || \"\").toLowerCase();\n        \n        if (summary.includes('biomüll') || summary.includes('bio')) {\n            activeResponse.actionBio = \"take out the trash - biomüll\";\n            activeResponse.colorBio = \"green\";\n        }\n        if (summary.includes('papier')) {\n            activeResponse.actionPaper = \"take out the trash - papier\";\n            activeResponse.colorPaper = \"yellow\";\n        }\n        if (summary.includes('restmüll')) {\n            activeResponse.actionDomestic = \"take out the trash - restmüll\";\n            activeResponse.colorDomestic = \"red\";\n        }\n    }\n} else {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"Keine Abholung morgen\" });\n    ledState = 0;\n}\n\nflow.set('boxStatus', activeResponse);\n\nmsg.payload = {\n    ledPower: ledState,\n    status: activeResponse\n};\nreturn msg;",
+        "name": "Parse .ICS & Multi-Day Schedule",
+        "func": "let fileContent = msg.payload;\n\nlet defaultResponse = {\n    actionBio: \"no collection\",\n    colorBio: \"white\",\n    actionPaper: \"no collection\",\n    colorPaper: \"white\",\n    actionDomestic: \"no collection\",\n    colorDomestic: \"white\"\n};\n\nif (!fileContent || typeof fileContent !== 'string') {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"Invalid file content\" });\n    flow.set('boxStatus', defaultResponse);\n    flow.set('upcomingSchedule', []);\n    msg.payload = { ledPower: 0, status: defaultResponse };\n    return msg;\n}\n\nlet lines = fileContent.split(/\\r?\\n/);\nlet events = [];\nlet currentEvent = null;\n\nfor (let line of lines) {\n    if (line.startsWith('BEGIN:VEVENT')) {\n        currentEvent = {};\n    } else if (line.startsWith('END:VEVENT') && currentEvent) {\n        events.push(currentEvent);\n        currentEvent = null;\n    } else if (currentEvent) {\n        let splitIdx = line.indexOf(':');\n        if (splitIdx !== -1) {\n            let key = line.substring(0, splitIdx).trim();\n            let val = line.substring(splitIdx + 1).trim();\n            currentEvent[key] = val;\n        }\n    }\n}\n\n// 1. Calculate Tomorrow for LED Reminder\nlet today = new Date();\nlet tomorrow = new Date(today);\stomorrow.setDate(today.getDate() + 1);\n\nlet formatDateStr = (d) => {\n    let y = d.getFullYear();\n    let m = String(d.getMonth() + 1).padStart(2, '0');\n    let dayStr = String(d.getDate()).padStart(2, '0');\n    return `${y}${m}${dayStr}`;\n};\n\nlet tomorrowStr = formatDateStr(tomorrow);\n\nlet getEventDate = (ev) => {\n    if (!ev.DTSTART) return \"\";\n    if (ev.DTSTART.includes(':')) {\n        return ev.DTSTART.split(':').pop().trim();\n    }\n    return ev.DTSTART.split('T')[0];\n};\n\nlet upcomingEventsForTomorrow = events.filter(ev => getEventDate(ev) === tomorrowStr);\n\nlet activeResponse = { ...defaultResponse };\nlet ledState = 0;\n\nif (upcomingEventsForTomorrow.length > 0) {\n    ledState = 1;\n    node.status({ fill: \"green\", shape: \"dot\", text: `Morgen Abholung! (${upcomingEventsForTomorrow.length})` });\n\n    for (let ev of upcomingEventsForTomorrow) {\n        let summary = (ev.SUMMARY || \"\").toLowerCase();\n        if (summary.includes('biomüll') || summary.includes('bio')) {\n            activeResponse.actionBio = \"take out the trash - biomüll\";\n            activeResponse.colorBio = \"green\";\n        }\n        if (summary.includes('papier')) {\n            activeResponse.actionPaper = \"take out the trash - papier\";\n            activeResponse.colorPaper = \"yellow\";\n        }\n        if (summary.includes('restmüll')) {\n            activeResponse.actionDomestic = \"take out the trash - restmüll\";\n            activeResponse.colorDomestic = \"red\";\n        }\n    }\n} else {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"Keine Abholung morgen\" });\n    ledState = 0;\n}\n\nflow.set('boxStatus', activeResponse);\n\n// 2. Build Multi-Day Schedule for the Next 7 Days (Pulsating / Day-by-Day View)\nlet nextWeekSchedule = [];\nfor (let i = 1; i <= 7; i++) {\n    let checkDate = new Date(today);\n    checkDate.setDate(today.getDate() + i);\n    let targetStr = formatDateStr(checkDate);\n    \n    let dayEvents = events.filter(ev => getEventDate(ev) === targetStr);\n    let dayTypes = dayEvents.map(ev => ev.SUMMARY || \"Unknown\");\n    \n    let dayColor = \"blue\"; // Blue means no trash for that day\n    if (dayTypes.some(t => t.toLowerCase().includes('bio'))) dayColor = \"green\";\n    else if (dayTypes.some(t => t.toLowerCase().includes('papier'))) dayColor = \"yellow\";\n    else if (dayTypes.some(t => t.toLowerCase().includes('restmüll'))) dayColor = \"red\";\n\n    nextWeekSchedule.push({\n        date: `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`,\n        dayOffset: i,\n        collections: dayTypes.length > 0 ? dayTypes : [\"no collection\"],\n        pulsatingIndicatorColor: dayColor\n    });\n}\n\nflow.set('upcomingSchedule', nextWeekSchedule);\n\nmsg.payload = {\n    ledPower: ledState,\n    status: activeResponse,\n    nextWeek: nextWeekSchedule\n};\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -84,7 +84,7 @@
         "type": "function",
         "z": "ics_gc_tab",
         "name": "Simulate LED Color By Target",
-        "func": "let data = msg.payload.status || {};\nlet activeLEDColor = \"blue\"; // Default to blue exclusively for no trash\nlet targetDescription = \"No trash scheduled for tomorrow (Blue LED)\";\n\nif (data.colorBio === \"green\") {\n    activeLEDColor = \"green\";\n    targetDescription = \"Target: Biomüll (Green LED)\";\n} else if (data.colorPaper === \"yellow\") {\n    activeLEDColor = \"yellow\";\n    targetDescription = \"Target: Papier (Yellow LED)\";\n} else if (data.colorDomestic === \"red\") {\n    activeLEDColor = \"red\";\n    targetDescription = \"Target: Restmüll (Red LED)\";\n}\n\nmsg.payload = {\n    simulationTarget: targetDescription,\n    simulatedLedColor: activeLEDColor,\n    timestamp: new Date().toISOString()\n};\n\nreturn msg;",
+        "func": "let data = msg.payload.status || {};\nlet activeLEDColor = \"blue\"; \nlet targetDescription = \"No trash scheduled for tomorrow (Blue LED)\";\n\nif (data.colorBio === \"green\") {\n    activeLEDColor = \"green\";\n    targetDescription = \"Target: Biomüll (Green LED)\";\n} else if (data.colorPaper === \"yellow\") {\n    activeLEDColor = \"yellow\";\n    targetDescription = \"Target: Papier (Yellow LED)\";\n} else if (data.colorDomestic === \"red\") {\n    activeLEDColor = \"red\";\n    targetDescription = \"Target: Restmüll (Red LED)\";\n}\n\nmsg.payload = {\n    simulationTarget: targetDescription,\n    simulatedLedColor: activeLEDColor,\n    timestamp: new Date().toISOString()\n};\n\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -143,19 +143,52 @@
         ]
     },
     {
+        "id": "http_in_upcoming",
+        "type": "http in",
+        "z": "ics_gc_tab",
+        "name": "POST /trash/schedule/upcoming",
+        "url": "/trash/schedule/upcoming",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 350,
+        "wires": [
+            ["api_upcoming_handler"]
+        ]
+    },
+    {
         "id": "api_handler_function",
         "type": "function",
         "z": "ics_gc_tab",
         "name": "Serve API Status / Reset",
-        "func": "let reqBody = msg.payload || {};\n\nlet isReset = reqBody.reset === true || \n              reqBody.action === \"reset\" || \n              reqBody.color === \"white\" ||\n              reqBody.status === \"white\";\n\nlet currentStatus = flow.get('boxStatus') || {\n    actionBio: \"no collection\",\n    colorBio: \"white\",\n    actionPaper: \"no collection\",\n    colorPaper: \"white\",\n    actionDomestic: \"no collection\",\n    colorDomestic: \"white\"\n};\n\nif (isReset) {\n    node.status({ fill: \"grey\", shape: \"ring\", text: \"Reset requested\" });\n    \n    currentStatus = {\n        actionBio: \"no collection\",\n        colorBio: \"white\",\n        actionPaper: \"no collection\",\n        colorPaper: \"white\",\n        actionDomestic: \"no collection\",\n        colorDomestic: \"white\"\n    };\n    \n    flow.set('boxStatus', currentStatus);\n} else {\n    node.status({ fill: \"blue\", shape: \"dot\", text: \"Serving current box status\" });\n}\n\nmsg.payload = currentStatus;\nreturn msg;",
+        "func": "let reqBody = msg.payload || {};\nlet isReset = reqBody.reset === true || reqBody.action === \"reset\" || reqBody.color === \"white\";\n\nlet currentStatus = flow.get('boxStatus') || {\n    actionBio: \"no collection\", colorBio: \"white\",\n    actionPaper: \"no collection\", colorPaper: \"white\",\n    actionDomestic: \"no collection\", colorDomestic: \"white\"\n};\n\nif (isReset) {\n    currentStatus = {\n        actionBio: \"no collection\", colorBio: \"white\",\n        actionPaper: \"no collection\", colorPaper: \"white\",\n        actionDomestic: \"no collection\", colorDomestic: \"white\"\n    };\n    flow.set('boxStatus', currentStatus);\n}\n\nmsg.payload = currentStatus;\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 480,
+        "x": 510,
         "y": 280,
+        "wires": [
+            ["http_response_node"]
+        ]
+    },
+    {
+        "id": "api_upcoming_handler",
+        "type": "function",
+        "z": "ics_gc_tab",
+        "name": "Serve Multi-Day Schedule",
+        "func": "let schedule = flow.get('upcomingSchedule') || [];\nmsg.payload = {\n    schedule: schedule\n};\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 510,
+        "y": 350,
         "wires": [
             ["http_response_node"]
         ]
@@ -167,8 +200,8 @@
         "name": "Send JSON Response",
         "statusCode": "",
         "headers": {},
-        "x": 770,
-        "y": 280,
+        "x": 810,
+        "y": 310,
         "wires": []
     }
 ]
